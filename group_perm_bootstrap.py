@@ -14,7 +14,8 @@ p = argparse.ArgumentParser()
 p.add_argument('reference_img', help='Path to the image to be thresholded.')
 p.add_argument('permutations_dir', help='Path to the directory containing the permutations.')
 p.add_argument('-m','--mask',type=str,default='',help='.')
-p.add_argument('-s','--number-of-subjects',type=int,default=23,help='Number of subjects.')
+p.add_argument('-s','--number-of-subjects',type=int,default=0,help='Number of subjects. This can be used instead of -S.')
+p.add_argument('-S','--subject-codes',type=str,default=[],nargs='+',help='Subject codes. This can be used instead of -s.')
 p.add_argument('-b','--blur',type=int,default=0,help='Blur amount. Doesn''t actually apply the blur, just looks up the right files.')
 p.add_argument('-B','--do-blur',type=int,default=0,help='Blur amount. Actually applies the blur.')
 p.add_argument('-r','--number-of-random-seeds',type=int,default=100,help='The number of permutations run for each subject.')
@@ -31,58 +32,113 @@ start = timer()
 # Load the reference image
 reference_img = nib.load(args.reference_img)
 reference_img_data = reference_img.get_data()
+automask = reference_img_data != 0
+print('')
+print("Shape of reference data:")
+print(reference_img.shape)
+print('')
 
 # Loop and compose maps from the permutations
 nperm = args.number_of_permutations
 max_subject_perm = args.number_of_random_seeds
-nsubj = args.number_of_subjects
-perm_dir = args.permutations_dir
-if args.base_zero_indexes:
-    adj = 0
+if args.subject_codes:
+    subject_codes = args.subject_codes
 else:
-    adj = 1
+    if args.base_zero_indexes:
+        subject_codes = list(range(args.number_of_subjects))
+    else:
+        subject_codes = list(range(1,args.number_of_subjects+1))
+
+
+nsubj = len(subject_codes)
+
+# NOTE IMPORTANT CHANGE
+perm_dir = os.path.dirname(args.permutations_dir)
+perm_fmt = os.path.basename(args.permutations_dir)
+#perm_dir = args.permutations_dir
 
 hdr = []
 dat = []
 print("Begin loading data:")
 bar = progressbar.ProgressBar()
-for s in bar(range(nsubj)):
-    try:
-        fname = "{subject:02d}_dartel_funcres.nii".format(subject = s+adj, blur = args.blur)
-        # fname = "{subject:02d}_C.b{blur:d}.nii".format(subject = s+adj, blur = args.blur)
-        hdr.append(nib.load(os.path.join(perm_dir,fname)))
-    except:
-        fname = "r{subject:02d}_dartel.nii.gz".format(subject = s+adj, blur = args.blur)
-        hdr.append(nib.load(os.path.join(perm_dir,fname)))
+for i,s in bar(enumerate(subject_codes)):
+    # TODO: This is an essentially broken part of the program that I need to
+    # come in and tweak as my workflow for generating these permutation files
+    # evolves. I want to avoid needing to specify all 23 files on the command
+    # line... but I need to establish a single convention and stick with it.
+#    try:
+#        fname = "{subject:02d}_dartel_funcres.nii".format(subject = s+adj, blur = args.blur)
+#        # fname = "{subject:02d}_C.b{blur:d}.nii".format(subject = s+adj, blur = args.blur)
+#        hdr.append(nib.load(os.path.join(perm_dir,fname)))
+#    except:
+#        fname = "r{subject:02d}_dartel_b4.nii.gz".format(subject = s+adj, blur = args.blur)
+#        hdr.append(nib.load(os.path.join(perm_dir,fname)))
+    fname = perm_fmt.format(subject = s, blur = args.blur)
+    hdr.append(nib.load(os.path.join(perm_dir,fname)))
 
     # tmp = hdr[s].get_data()
     if args.preload_all_permutations:
-        dat.append(np.array(hdr[s].get_data()))
+        dat.append(np.array(hdr[i].get_data()))
     else:
-        dat.append(hdr[s].get_data())
+        dat.append(hdr[i].get_data())
+
+print('')
+print("Shape of permutation data:")
+
+for s in range(nsubj):
+    print(dat[s].shape)
+
+print('')
 
 end = timer()
 print("Data loaded: {seconds:.4f} seconds".format(seconds=end-start))
 middle = timer()
 
 if args.mask:
-    mask_img = nib.four_to_three(nib.load(args.mask))[0]
+    try:
+        mask_img = nib.four_to_three(nib.load(args.mask))[0]
+    except ValueError:
+        mask_img = nib.load(args.mask)
+
     mask_data = mask_img.get_data()
     # If it is a probability map of tissue types, this says treat all voxels
     # that have a probability 0.2 or higher of being grey matter.
     # 0.2 is based on John Ashburner's VBM tutorial (VBMclass15.pdf) and Kurth,
     # Gaser, and Luders (2015, Nature Protocols)
-    mask = mask_data > 0.2
+    print("Masking reference data ...")
     try:
-        reference_img_vec = reference_img_data[mask]
+        mask = (mask_data > 0.2) * automask
     except:
+        print("Dimension mismatch between mask and data! Resampling the mask and trying again ...")
         rmask = nib.processing.resample_from_to(mask_img, reference_img)
         mask_data = rmask.get_data()
-        mask = mask_data > 0.2
-        reference_img_data = reference_img_data[mask]
+        mask = (mask_data > 0.2) * automask
 
-    for s in range(nsubj):
-        dat[s] = dat[s][mask]
+else:
+    mask = automask
+
+reference_img_data = reference_img_data[mask]
+print('Masked reference data shape:')
+print(reference_img_data.shape)
+print('')
+# This would be for writing out the masked reference data but it's not done... 
+#if args.mask:
+#    R3D = np.zeros(reference_img.shape)
+#    MM = np.zeros(reference_img.shape)
+#    R3D[mask] = B
+#    MM[mask] = mask[mask]
+#    B_img = nib.Nifti1Image(B3D, affine=reference_img.affine, header=reference_img.header)
+#    B3D = None
+#else:
+#    B_img = nib.Nifti1Image(B, reference_img.affine)
+#nib.save(B_img, 'reference_image.nii')
+
+print('Masked permutation data shape:')
+for s in range(nsubj):
+    dat[s] = dat[s][mask]
+    print(dat[s].shape)
+
+print('')
 
 B = np.zeros(reference_img_data.shape, dtype='int16')
 
@@ -97,7 +153,10 @@ for p in bar(range(nperm)):
     sample = np.random.choice(max_subject_perm, nsubj, replace=True)
     for s,r in enumerate(sample):
         if args.mask:
-            img_data = dat[s][:,r]
+            try:
+                img_data = dat[s][:,0,r]
+            except IndexError:
+                img_data = dat[s][:,r]
         else:
             try:
                 img_data = dat[s][:,:,:,0,r]
@@ -121,15 +180,23 @@ for p in bar(range(nperm)):
 end = timer()
 print("Permutation time: {seconds:.4f} seconds".format(seconds=end-middle))
 if args.mask:
+    print("Reconstructing 3D permutation map ...")
     B3D = np.zeros(reference_img.shape)
+    MM = np.zeros(reference_img.shape)
     B3D[mask] = B
-    B_img = nib.Nifti1Image(B3D, affine=reference_img.affine, header=reference_img.header)
-    B3D = None
+    MM[mask] = mask[mask]
+    B_img = nib.Nifti1Image(B3D, affine=reference_img.affine)
 else:
-    B_img = nib.Nifti1Image(B, reference_img.affine)
+    B_img = nib.Nifti1Image(B, affine=reference_img.affine)
+
+print("Shape of 3D permutation map ...")
+print(B_img.shape)
+print("")
+print("Writing B_img to " + args.output_filename)
 nib.save(B_img, args.output_filename)
 
 # Clear variables we won't need anymore
+B3D = None
 B_img = None
 hdr = None
 dat = None
@@ -139,7 +206,9 @@ bar = progressbar.ProgressBar()
 clustersizes = [[] for p in range(len(args.pthreshold))]
 #for p in bar(range(nperm)):
 # HACK!!!!
-nn = 1000 if 1000 < nperm else nperm
+# TODO: There should be a way to specify this from the command line.
+#nn = 1000 if 1000 < nperm else nperm
+nn = nperm
 for p in bar(range(nn)):
     B = np.zeros(reference_img_data.shape, dtype='int16')
     if args.mask:
@@ -185,6 +254,7 @@ for p in bar(range(nn)):
 
 pclustsize = []
 for i, pthreshold in enumerate(args.pthreshold):
+    pstr = "{:.3f}".format(pthreshold)[2:] # drop the 0. from the beginning
     maxsizes = [max(x) for x in clustersizes[i] if x]
     if maxsizes:
         maxclustersize = max(maxsizes)
@@ -194,11 +264,11 @@ for i, pthreshold in enumerate(args.pthreshold):
             clustersizeA[j,0:len(y)] = y
 
         pclustsize = np.sum(clustersizeA, axis=0)
-        with open("clustsize_frequency_p{:.3f}.txt".format(pthreshold),'w') as f:
+        with open("clustsize_frequency_p{:s}.txt".format(pstr),'w') as f:
             for x in pclustsize:
                 f.write(str(x)+"\n")
     else:
-        with open("clustsize_frequency_p{:.3f}.txt".format(pthreshold),'w') as f:
+        with open("clustsize_frequency_p{:s}.txt".format(pstr),'w') as f:
             f.write("0\n")
 
 end = timer()
