@@ -19,6 +19,7 @@ p.add_argument('-S','--subject-codes',type=str,default=[],nargs='+',help='Subjec
 p.add_argument('-b','--blur',type=int,default=0,help='Blur amount. Doesn''t actually apply the blur, just looks up the right files.')
 p.add_argument('-B','--do-blur',type=int,default=0,help='Blur amount. Actually applies the blur.')
 p.add_argument('-r','--number-of-random-seeds',type=int,default=100,help='The number of permutations run for each subject.')
+p.add_argument('-R','--right-tail',action='store_true',help='Use this flag if significant values in the reference image would be in the right tail of the permutation distribution (i.e. larger than values in the permutation distribution).')
 p.add_argument('-z','--base-zero-indexes',action='store_true',help='Use this flag if random seeds and subjects are identified with base-zero indexes.')
 p.add_argument('-n','--number-of-permutations',type=int,default=100,help='The number of group level maps to generate to threshold the group reference image.')
 p.add_argument('-o','--output-filename',type=str,default='perm_map.nii',help='Name of the output file (will be nifti-1 formatted).')
@@ -169,7 +170,10 @@ for p in bar(range(nperm)):
             x = x + img_data
 
     y = x / nsubj
-    b = reference_img_data > y
+    if args.right_tail:
+        b = reference_img_data > y
+    else:
+        b = reference_img_data < y
     B = B + b.astype('int16')
     if args.log_and_write_permutations or args.log_permutations:
         if args.mask:
